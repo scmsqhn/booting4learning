@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-# coding: utf-8
-
 '''
 function:
 description:
@@ -16,11 +13,12 @@ from sklearn import preprocessing as pp
 from matplotlib.font_manager import FontProperties
 import sys,os
 import numpy as np
-import xgboost as xgb
+#import xgboost as xgb
 from sklearn import preprocessing
 from sklearn.metrics import classification_report
 from collections import defaultdict
 import traceback
+import json
 
 
 #get_ipython().magic('matplotlib inline')
@@ -31,6 +29,21 @@ CODE_STYLE = r'yahei.ttf'
 BASEDIR = BASEDIR_2
 
 # Initial the parameter  
+
+class Times_tooles(object):
+    def __init__(self):
+        self.desc = "interface to handle times"
+        
+    def get_day(self, innum):
+        '''
+        chage num to day, which coule be calculate with dates
+        '''
+        days = datetime.timedelta(days=innum)
+        return days
+# ===================================================
+'''
+'''    
+# ===================================================
 class Model_bond_fault(object):
 
     def __init__(self):
@@ -153,7 +166,7 @@ class Model_bond_fault(object):
                     '公司中文名称', '主要产品及业务', '办公地址', '评级展望', '债券主体公司id',\
                      '前次信用评级', '评级变动方向', '城市'], axis=1)
 
-        # 设置列类型
+        # 设置列类型  
         company[['公司类别','评级类型','评级机构代码']] = company[['公司类别','评级类型','评级机构代码']].astype(str)
         company['员工总数人'] = company[company['员工总数人'].notnull()]['员工总数人'].astype(int)
 
@@ -171,7 +184,7 @@ class Model_bond_fault(object):
         # print(self.public_sentiment_df)
         print('[x] 第二次 合并数据 merge')
 
-        #self.bond_year = pd.merge(self.bond_year, self.public_sentiment_df, how='inner', left_on='公司名称',right_on=['enterprise_name'])
+        self.bond_year = pd.merge(self.bond_year, self.public_sentiment_df, how='inner', left_on=['公司名称','公告日期'],right_on=['enterprise_name','pub_date'])
         #self.bond_halfyear = pd.merge(self.bond_halfyear, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_thr = pd.merge(self.bond_quarter_thr, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_one = pd.merge(self.bond_quarter_one, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
@@ -253,8 +266,37 @@ class Model_bond_fault(object):
         该处增加企业年龄
         '''
         # data_normal(bond_year)
-
-    def encode_feature(self, bond):
+        
+    def get_day(self, innum):
+        days = datetime.timedelta(days=innum)
+        return days
+    
+    def calcu_label(self, x, bond):
+        label_dict = {}        
+        bond['上月舆情'] = bond['评级日期']-get_day(30)
+        bond_month_ago = bond[bond['上月舆情']<bond['pub_date']]
+        bond_month_ago[bond_month_ago['pub_date']<bond_month_ago['评级日期']]
+        bond_month_ago[bond_month_ago['pub_date']<bond_month_ago['评级日期']]        
+        group_bond = bond_month_ago.groupby('lable_type')
+        label_lst = []
+        label_set = []
+        for item in group_bond.groups.keys():
+            item = re.sub('\'','',item)
+            for j in item.split(','):
+                label_lst.append(j) 
+        label_set = list(set(label_lst))
+        for i in label_set:
+            my_count = label_lst.count(i)
+            label_dict[i] = my_count
+        return(str(label_dict))
+        
+    
+    def groupby_sentiment(self, bond):
+        bond = bond.copy()
+        bond['label_sum'] = bond['评级日期'].apply(lambda x : self.calcu_label(x,bond))
+        return bond
+        
+    def encode_feature(self, bond):        
         '''
         对信用评级的评分，前述已完成，此方法暂时未使用
         '''
@@ -404,13 +446,15 @@ class Model_bond_fault(object):
         df_conf.to_csv(file_name, index=True, sep=',',encoding = "utf-8")  
 
 if __name__ == '__main__':
+    
     try:
-
         print('[x] START ===')
         md = Model_bond_fault()
         md.init_data()
         print('[x] 数据处理完毕')
-        md.ana_model_pred()
+        md.bond_year = md.groupby_sentiment(md.bond_year)
+        print(md.bond_year)
+#        md.ana_model_pred()
     #    md.wr2csv(md.bond_df, 'bond_df.csv')
     #    md.wr2csv(md.level_df, 'level_df.csv')
     #    md.wr2csv(md.company_df, 'company_df.csv')
