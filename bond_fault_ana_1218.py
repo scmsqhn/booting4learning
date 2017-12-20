@@ -19,6 +19,7 @@ from sklearn.metrics import classification_report
 from collections import defaultdict
 import traceback
 import json
+import datetime
 
 
 #get_ipython().magic('matplotlib inline')
@@ -107,8 +108,6 @@ class Model_bond_fault(object):
         except:
             return ""
         
-
-
     def init_data(self):
         '''
         数据准备
@@ -121,6 +120,7 @@ class Model_bond_fault(object):
         | bond_df"   | "a.csv"
         | level_df   | "level.csv"
         '''
+        
         dateparse = lambda dates: pd.datetime.strptime((str(dates)+'0101')[0:8], '%Y%m%d') if not pd.isnull(dates) else None
         self.company_df = pd.read_csv(os.path.join(BASEDIR, "company_info.csv"),
                          parse_dates=['成立日期'],
@@ -143,11 +143,18 @@ class Model_bond_fault(object):
                        parse_dates=['pub_date'],
                        infer_datetime_format=True,
                        date_parser=self.dateparse_2)
+        
+        #        dateparse_2 = lambda dates: pd.datetime.strptime((str(dates)+'0101')[0:8], '%Y%m%d') if not pd.isnull(dates) else None
+        self.bond_fault_df = pd.read_csv(os.path.join(BASEDIR, "bond_fault.csv"),
+                       parse_dates=['发生日期'],
+                       infer_datetime_format=True,
+                       date_parser=dateparse)
+
 
         self.public_sentiment_df['lable_type'] = self.public_sentiment_df['lable_type'].apply(lambda x: md.wash_data_public_sentiment(x))
 #        self.public_sentiment_df = md.wash_data_public_sentiment(self.public_sentiment_df)
 
-        self.bond_df['报告类型'] = self.bond_df['报告期'].apply(lambda x: '年报' if x.month==12 else ('半年报' if x.month==6 else ('一季报' if x.month==3 else '三季报')))
+        self.bond_df['报告类型'] = self.bond_df['报告期'].apply(lambda x: '年报' if x.month==12 else ('半年报' if x.month==6 else ('一季报' if x.month==314 else '三季报')))
         company = pd.merge(self.company_df, self.level_df, how='inner', left_on='公司名称', right_on='公司中文名称')
 
         # 常规评级、穆迪评级，量化为分数
@@ -183,13 +190,24 @@ class Model_bond_fault(object):
         # print(type(self.public_sentiment_df))
         # print(self.public_sentiment_df)
         print('[x] 第二次 合并数据 merge')
-
         self.bond_year = pd.merge(self.bond_year, self.public_sentiment_df, how='inner', left_on=['公司名称','公告日期'],right_on=['enterprise_name','pub_date'])
         #self.bond_halfyear = pd.merge(self.bond_halfyear, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_thr = pd.merge(self.bond_quarter_thr, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_one = pd.merge(self.bond_quarter_one, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         print('[x] 数据初始化完毕')
 #        print(bond_year_2)
+        self.bond_year['舆情日期'] = self.bond_year['评级日期'].apply(lambda x : self.calcu_date(x,30))
+        self.bond_year = self.groupby_sentiment(self.bond_year)
+        #self.bond_halfyear = self.groupby_sentiment(self.bond_halfyear)
+        #self.bond_quarter_thr = self.groupby_sentiment(self.bond_quarter_thr)
+        #self.bond_quarter_one = self.groupby_sentiment(self.bond_quarter_one)
+#        self.bond_year['舆情日期vs报告'] = self.bond_year['报告期'].apply(lambda x : self.calcu_date(x,30))
+
+        self.bond_year = pd.merge(self.bond_year, self.bond_fault_df, how='left', left_on=['公司名称'],right_on=['发行人'])
+        self.bond_halfyear = pd.merge(self.bond_halfyear, self.bond_fault_df, how='left', left_on=['公司名称'],right_on=['发行人'])
+        self.bond_quarter_thr = pd.merge(self.bond_quarter_thr, self.bond_fault_df, how='left', left_on=['公司名称'],right_on=['发行人'])
+        self.bond_quarter_one = pd.merge(self.bond_quarter_one, self.bond_fault_df, how='left', left_on=['公司名称'],right_on=['发行人'])
+#        print(self.bond_year)
 
 
     def process_data(self, bond):
@@ -255,8 +273,10 @@ class Model_bond_fault(object):
             '信用评级分数',
             '注册资本万元',
         ]
+        
         for x in columns_normal:
             bond[x] = bond[x].transform(lambda x: (x - x.mean()) / x.std())
+        
             
         '''
         【笔记】
@@ -271,32 +291,127 @@ class Model_bond_fault(object):
         days = datetime.timedelta(days=innum)
         return days
     
-    def calcu_label(self, x, bond):
-        label_dict = {}        
-        bond['上月舆情'] = bond['评级日期']-get_day(30)
-        bond_month_ago = bond[bond['上月舆情']<bond['pub_date']]
-        bond_month_ago[bond_month_ago['pub_date']<bond_month_ago['评级日期']]
-        bond_month_ago[bond_month_ago['pub_date']<bond_month_ago['评级日期']]        
-        group_bond = bond_month_ago.groupby('lable_type')
+    def calcu_date(self, x, num):
+#        print((x - self.get_day(num)))
+        return (x - self.get_day(num)) 
+    
+    def count_label(self,bond):
+        label_dict={}
         label_lst = []
         label_set = []
-        for item in group_bond.groups.keys():
+        for item in bond.loc[:,'lable_type']:
+            item = re.sub('\'','',item)
+            for j in item.split(','):
+                label_lst.append(j)
+#        print(list(set(label_lst)))
+        label_set = list(set(label_lst))
+#        label_set = list(set(label_lst))
+        for i in label_set:
+#            print(i)
+            my_count = label_lst.count(i)
+            label_dict[i] = my_count
+#            label_dict.keys()
+            one_hot=pd.get_dummies(list(label_dict.keys()))
+#            print(type(one_hot))
+        return[one_hot, label_dict]  
+    
+    def calcu_label(self, bond):
+        print('[x] calcu_label')
+#        print(bond)
+        bond_tmp = bond.copy()
+#        print(bond_tmp)
+        for i in bond_tmp.index:
+            itm = bond_tmp.loc[i]
+#            print(itm)
+            startdate = itm['评级日期']
+            enddate = itm['舆情日期']
+            print('')
+ #           print(startdate,enddate)
+            bond_tmp_tmp = bond_tmp[bond_tmp["pub_date"]>startdate & bond_tmp["pub_date"]<enddate]
+#            print(bond_tmp_tmp)
+#            lable_type = bond_tmp.iloc[:,'lable_type']
+  #          print(lable_type)
+            
+        '''
+#        for i in bond_tmp.iloc[:,:]:
+#            pass 
+#            print(type(i))
+#            print(bond_tmp.iloc[i,:])
+        
+            startdate = bond_tmp.loc[i]['舆情日期']
+            enddate = bond_tmp.loc[i]['评级日期']
+            bond_tmp = bond_tmp.loc[bond_tmp["pub_date"]>startdate & bond_tmp["pub_date"]<enddate]
+            for i in bond_tmp.loc[:,'lable_type']:
+                print('读取lable_type')
+                print(i)
+        '''
+        
+#        print(bond_tmp)
+        
+        '''
+        label_dict = {}
+        bond.loc
+        x['评级日期'] = x['评级日期'] - self.get_day(num)
+        bond_month_ago = bond[x['评级日期']<bond['pub_date']]
+        bond_month_ago = bond_month_ago[bond_month_ago['pub_date']<x['评级日期']]
+        bond_month_ago = bond_month_ago[bond_month_ago['公司名称']==x['公司名称']]
+#        group_bond = bond_month_ago.groupby('lable_type')
+        label_lst = []
+        label_set = []
+        for item in bond.loc[:,'lable_type']:
             item = re.sub('\'','',item)
             for j in item.split(','):
                 label_lst.append(j) 
         label_set = list(set(label_lst))
         for i in label_set:
+#            print(i)
             my_count = label_lst.count(i)
             label_dict[i] = my_count
         return(str(label_dict))
-        
+        '''        
     
-    def groupby_sentiment(self, bond):
-        bond = bond.copy()
-        bond['label_sum'] = bond['评级日期'].apply(lambda x : self.calcu_label(x,bond))
+    def groupby_sentiment(self, inbond):
+        bond = inbond.copy()
+        [onehot, label_count] = self.count_label(inbond)
+        for i in label_count.keys():
+            bond[i] = 0
+#        bond['label_sum'] = bond[['评级日期','lable_type','舆情日期']].apply(lambda x : self.calcu_label(x))       
+        for i in bond.index:
+#            print("[x] 以此打印index i = ",i)
+            line = bond.iloc[i,:]
+#            print(line)
+            sta = line['舆情日期']
+#            print(sta)
+            end = line['评级日期']
+#            print(end)
+            bond_tmp = bond[(bond['pub_date']> sta) & (bond['pub_date']< end)]
+            lable_type = bond_tmp.loc[:,'lable_type']
+            lst = []
+            for ii in lable_type:
+                for iii in ii.split(','):
+                    lst.append(iii)
+ #           print('[x] groupby_sentiment')
+#            print(lst)            
+            ser_lst =[]
+            part_count = pd.Series(lst).value_counts()
+#            print('* 将一类舆情标签 和 数量作为一个columns写入df')
+            for j in part_count.keys():
+#                print('写入新值', i, j, part_count[j])
+                bond.ix[i,j] = part_count[j]
+#                ser_lst.append(onehot[i].append(pd.Series()))
+#            print('* 打印第一个整理好的舆情标签')
+#            print(pd.DataFrame(ser_lst))
+#            ls = pd.DataFrame(ser_lst)
+#            print(ls)
+#            line['label_sum'] = ls
         return bond
+            
+            
+            
+            
+ #       return bond
         
-    def encode_feature(self, bond):        
+    def encode_feature_base(self, bond):
         '''
         对信用评级的评分，前述已完成，此方法暂时未使用
         '''
@@ -312,12 +427,32 @@ class Model_bond_fault(object):
         #    print(bond_tmp['信用评级'])
 
         # 对类型字段进行onehot编码
+        bond_tmp['lable_type']
         bond_tmp=pd.get_dummies(bond_tmp)
+        self.count_label(bond_tmp)
 
         # bond shuffle
         return bond_tmp.sample(frac=1).reset_index(drop=True), le.classes_
         #encode_feature(bond_year)
 
+    def encode_feature(self, bond):
+        '''
+        对信用评级的评分，前述已完成，此方法暂时未使用
+        '''
+        bond_tmp = bond.copy()
+        # 合并B,C分类, 并取消+/-微调
+        bond_tmp['信用评级'] = bond_tmp['信用评级'].apply(lambda x: x[0] if x[0].upper() in ['B', 'C'] else (x[0:-1] if x[-1] in ['+','-'] else x)) 
+        # 显示各分类的数量
+        # sns.factorplot(y='信用评级', data=bond_tmp, kind='count', size=7)
+        # 对信用评级进行编码
+        le = pp.LabelEncoder()
+        le.fit(bond_tmp['信用评级'])
+        bond_tmp['信用评级'] = le.transform(bond_tmp['信用评级'])
+        bond_tmp=pd.get_dummies(bond_tmp)
+
+        # bond shuffle
+        return bond_tmp.sample(frac=1).reset_index(drop=True), le.classes_
+        #encode_feature(bond_year)
 
     # 训练模型
     def run(self, data, label, num_round=2000):
@@ -397,15 +532,15 @@ class Model_bond_fault(object):
     def ana_model_pred(self):
         # 归一化
         self.data_normal(self.bond_year)
-        self.data_normal(self.bond_halfyear)
-        self.data_normal(self.bond_quarter_one)
-        self.data_normal(self.bond_quarter_thr)
+#        self.data_normal(self.bond_halfyear)
+#        self.data_normal(self.bond_quarter_one)
+#        self.data_normal(self.bond_quarter_thr)
 
         # 数据关联
         b_year = self.process_data(self.bond_year)
-        b_halfyear = self.process_data(self.bond_halfyear)
-        b_quarter_one = self.process_data(self.bond_quarter_one)
-        b_quarter_thr = self.process_data(self.bond_quarter_thr)
+#        b_halfyear = self.process_data(self.bond_halfyear)
+#        b_quarter_one = self.process_data(self.bond_quarter_one)
+#        b_quarter_thr = self.process_data(self.bond_quarter_thr)
 
 
         # 查看数值列分布
@@ -422,7 +557,7 @@ class Model_bond_fault(object):
         self.create_feature_map(b.columns)
         # calc_fscore()
 
-
+        '''
         # 是否省份，地市会提高准确率？
         b, label = self.encode_feature(b_halfyear)
         #self.show_corr(b.iloc[:,:10])
@@ -439,6 +574,7 @@ class Model_bond_fault(object):
         #self.show_corr(b.iloc[:,:10])
         self.run(b, label, 5000)
         self.create_feature_map(b.columns)
+        '''
 
         
     def wr2csv(self, df_conf, file_name):
@@ -452,16 +588,16 @@ if __name__ == '__main__':
         md = Model_bond_fault()
         md.init_data()
         print('[x] 数据处理完毕')
-        md.bond_year = md.groupby_sentiment(md.bond_year)
-        print(md.bond_year)
-#        md.ana_model_pred()
+#        print(md.bond_year)
+#        print(md.bond_year)
+        md.ana_model_pred()
     #    md.wr2csv(md.bond_df, 'bond_df.csv')
     #    md.wr2csv(md.level_df, 'level_df.csv')
     #    md.wr2csv(md.company_df, 'company_df.csv')
     #    md.wr2csv(md.bond_halfyear, 'bond_halfyear.csv')
     #    md.wr2csv(md.bond_quarter_one, 'bond_quarter_one.csv')
     #    md.wr2csv(md.bond_quarter_thr, 'bond_quarter_thr.csv')
-    #    md.wr2csv(md.bond_year, 'bond_year.csv')
+        md.wr2csv(md.bond_year, 'bond_year.csv')
     
     except :#Exception, e:
         traceback.print_exc()
