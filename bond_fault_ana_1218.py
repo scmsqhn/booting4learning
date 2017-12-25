@@ -20,14 +20,16 @@ from collections import defaultdict
 import traceback
 import json
 import datetime
+import xgboost as xgb
 
 
 #get_ipython().magic('matplotlib inline')
 
 BASEDIR_1 = r"D:\bond_fault\bond\bond_data"
 BASEDIR_2 = r'/bond_fault/bond/bond_data'
+BASEDIR_3 = r'/home/zean/bond_risk/data_wash'
 CODE_STYLE = r'yahei.ttf'
-BASEDIR = BASEDIR_2
+BASEDIR = BASEDIR_3
 
 # Initial the parameter  
 
@@ -140,7 +142,7 @@ class Model_bond_fault(object):
 
 #        dateparse_2 = lambda dates: pd.datetime.strptime((str(dates)+'0101')[0:8], '%Y%m%d') if not pd.isnull(dates) else None
         self.public_sentiment_df = pd.read_csv(os.path.join(BASEDIR, "public_sentiment.csv"),
-                       parse_dates=['pub_date'],
+                       parse_dates=['與情日期'],
                        infer_datetime_format=True,
                        date_parser=self.dateparse_2)
         
@@ -190,7 +192,7 @@ class Model_bond_fault(object):
         # print(type(self.public_sentiment_df))
         # print(self.public_sentiment_df)
         print('[x] 第二次 合并数据 merge')
-        self.bond_year = pd.merge(self.bond_year, self.public_sentiment_df, how='inner', left_on=['公司名称','公告日期'],right_on=['enterprise_name','pub_date'])
+        self.bond_year = pd.merge(self.bond_year, self.public_sentiment_df, how='inner', left_on=['公司名称','公告日期'],right_on=['enterprise_name','與情日期'])
         #self.bond_halfyear = pd.merge(self.bond_halfyear, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_thr = pd.merge(self.bond_quarter_thr, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
         #self.bond_quarter_one = pd.merge(self.bond_quarter_one, self.public_sentiment_df, how='inner', left_on='公司名称',right_on='enterprise_name')
@@ -503,6 +505,7 @@ class Model_bond_fault(object):
         # 计算分类预测准确性
         pred = bst.predict(xg_test)
         # 打印评估结果
+
         print(classification_report(test_Y, pred, target_names=label))
 
     # 计算特征权重
@@ -581,25 +584,140 @@ class Model_bond_fault(object):
         import csv
         df_conf.to_csv(file_name, index=True, sep=',',encoding = "utf-8")  
 
+def read_clear_file():
+    out_put = {}
+
+    company_df = pd.read_csv(os.path.join(BASEDIR, "company_df.csv"),
+                     parse_dates=['成立日期'],
+                     infer_datetime_format = True,
+                     date_parser=dateparse_2)
+    #print(company_df)
+    bond_df = pd.read_csv(os.path.join(BASEDIR, "bond_df.csv"),
+                  parse_dates=['报告期'],
+                  infer_datetime_format = True,
+                  date_parser=dateparse_2)
+    #print(bond_df)
+
+    level_df = pd.read_csv(os.path.join(BASEDIR, "level_df.csv"),
+                   parse_dates=['评级日期','公告日期'],
+                   infer_datetime_format=True,
+                   date_parser=dateparse_2)
+
+#        dateparse_2 = lambda dates: pd.datetime.strptime((str(dates)+'0101')[0:8], '%Y%m%d') if not pd.isnull(dates) else None
+    public_sentiment_df = pd.read_csv(os.path.join(BASEDIR, "public_sentiment_df.csv"),
+                   parse_dates=['舆情日期'],
+                   infer_datetime_format=True,
+                   date_parser=dateparse_2)
+    
+    #        dateparse_2 = lambda dates: pd.datetime.strptime((str(dates)+'0101')[0:8], '%Y%m%d') if not pd.isnull(dates) else None
+    bond_fault_df = pd.read_csv(os.path.join(BASEDIR, "bond_fault_df.csv"),
+                   parse_dates=['发生日期'],
+                   infer_datetime_format=True,
+                   date_parser=dateparse_2)
+
+    out_put['company_df'] = company_df
+    out_put['bond_df'] = bond_df
+    out_put['level_df'] = level_df
+    out_put['public_sentiment_df'] = public_sentiment_df
+    out_put['bond_fault_df'] = bond_fault_df
+    return out_put
+
+def merge_all():
+    pass
+    
+def dateparse_2(dates):
+    try:
+        return (pd.datetime.strptime(str(dates)[0:10], '%Y-%m-%d'))
+    except:
+        return None
+
+
+class Trade_risk_module():
+    def __init__(self):
+        pass
+
+    def get_data(self):
+        data = {}
+        data['pred'] = pd.read_csv('/home/zean/Downloads/train.csv')
+        data['train'] = pd.read_csv('/home/zean/Downloads/train.csv')
+        train = data['train'].sample(frac=0.3)
+        test = data['train'].sample(frac=0.3)
+        test = test.drop_duplicates(train)
+
+        train_X = train.iloc[1:,:-1]
+        train_Y = train.iloc[1:,-1]
+        test_X = test.iloc[1:,:-1]
+        test_Y = test.iloc[1:,-1]
+        pred_X = data['pred'].iloc[1:,:-1]
+        pred_Y = data['pred'].iloc[1:,-1]
+        return [train_X, train_Y, test_X, test_Y, pred_X, pred_Y]
+
+    def run(self, train_X, train_Y,test_X, test_Y, pred_X, pred_Y, num_round=5000):
+
+        xg_train = xgb.DMatrix(train_X, label=train_Y)
+        xg_test = xgb.DMatrix(test_X, label=test_Y)
+        param = {
+            'objective': 'multi:softmax', #目标函数
+            'eval_metric': 'mlogloss',# 评估函数
+            'gamma': 0.1, # 裕度
+            'max_depth': 20,# 树形深度 default 6 越大越拟合
+            'lambda': 10, # L2正则 惩罚项
+            'subsample': 0.7,# 采样样本、总样本比
+            'colsample_bytree': 0.7,  # 在建立树时对特征随机采样的比例
+            'colsample_bylevel': 0.7, # 决定每次节点划分时子样例的比例
+            'eta': 0.01, # 收缩补偿 0.01~0.2
+            'tree_method': 'exact',
+            'seed': 0,# 伪随机数种子
+            'scale_pos_weight': 5, # 样本不均衡
+            'num_class': 2  # 几分类
+        }
+
+        watchlist = [(xg_train,'train'), (xg_test, 'test')]
+        bst = xgb.train(param, xg_train, num_round, watchlist )
+        # 保存训练模型
+        bst.save_model('/home/zean/bond_risk/bond_data/xgb.model')
+        # 计算分类预测准确性
+        pred = bst.predict(xg_test)
+        # 打印评估结果
+        print(classification_report(test_Y, pred, target_names="01"))
+
+    def show_corr(self, bond):
+        colormap = plt.cm.viridis
+        plt.figure(figsize=(15,15))
+        plt.title('Pearson Correlation of Features', y=1.05, size=15)
+        sns.heatmap(bond.iloc[:,:-1].corr(),linewidths=0.1,vmax=1.0, square=True, cmap=colormap, linecolor='white', annot=True)
+
+
 if __name__ == '__main__':
     
-    try:
-        print('[x] START ===')
-        md = Model_bond_fault()
-        md.init_data()
-        print('[x] 数据处理完毕')
-#        print(md.bond_year)
-#        print(md.bond_year)
-        md.ana_model_pred()
-    #    md.wr2csv(md.bond_df, 'bond_df.csv')
-    #    md.wr2csv(md.level_df, 'level_df.csv')
-    #    md.wr2csv(md.company_df, 'company_df.csv')
-    #    md.wr2csv(md.bond_halfyear, 'bond_halfyear.csv')
-    #    md.wr2csv(md.bond_quarter_one, 'bond_quarter_one.csv')
-    #    md.wr2csv(md.bond_quarter_thr, 'bond_quarter_thr.csv')
-        md.wr2csv(md.bond_year, 'bond_year.csv')
+     try:
+        mod = Trade_risk_module()
+        dLst = mod.get_data()
+
+        mod.show_corr(dLst[0].iloc[:,:-1])
+
+        mod.run(dLst[0],dLst[1],dLst[2],dLst[3],dLst[4],dLst[5])
+        mod.create_feature_map(dLst.columns)
+        # output = read_clear_file()
+        # for i in output.keys():
+        #     print(output[i].columns)
+        
+#         print('[x] START ===')
+#         md = Model_bond_fault()
+#         md.init_data()
+#         print('[x] 数据处理完毕')
+# #        print(md.bond_year)
+# #        print(md.bond_year)
+#         md.ana_model_pred()
+#     #    md.wr2csv(md.bond_df, 'bond_df.csv')
+#     #    md.wr2csv(md.level_df, 'level_df.csv')
+#     #    md.wr2csv(md.company_df, 'company_df.csv')
+#     #    md.wr2csv(md.bond_halfyear, 'bond_halfyear.csv')
+#     #    md.wr2csv(md.bond_quarter_one, 'bond_quarter_one.csv')
+#     #    md.wr2csv(md.bond_quarter_thr, 'bond_quarter_thr.csv')
+#         md.wr2csv(md.bond_year, 'bond_year.csv')
     
-    except :#Exception, e:
-        traceback.print_exc()
+     except :#Exception, e:
+         traceback.print_exc()
 
 
